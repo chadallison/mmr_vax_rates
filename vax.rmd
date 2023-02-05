@@ -1,7 +1,5 @@
 ---
 title: "using tidymodels to model vaccination rate data"
-author: "chad allison"
-date: '2023-02-03'
 output: github_document
 ---
 
@@ -11,6 +9,7 @@ output: github_document
 tictoc::tic()
 library(tidyverse)
 library(tidymodels)
+library(rstanarm)
 
 theme_custom = tvthemes::theme_avatar() +
   theme(plot.title = element_text(hjust = 0.5),
@@ -80,25 +79,108 @@ measles_df |>
 
 ___
 
-### continue here
+### fitting a basic logistic regression model
 
 ```{r}
-glimpse(measles_df)
+glm_fit = logistic_reg() |>
+  set_engine("glm") |>
+  fit(mmr_threshold ~ state, data = measles_df)
+
+glm_fit
 ```
 
 ___
 
+### getting predictions and confident intervals
 
+```{r}
+new_schools = tibble(state = unique(measles_df$state))
+mean_pred = predict(glm_fit, new_data = new_schools, type = "prob")
+conf_int = predict(glm_fit, new_data = new_schools, type = "conf_int")
 
+schools_res = new_schools |>
+  bind_cols(mean_pred) |>
+  bind_cols(conf_int)
 
+glimpse(schools_res)
+```
 
+___
 
+### viewing modeling results
 
+```{r}
+schools_res |>
+  mutate(state = fct_reorder(state, .pred_above)) |>
+  ggplot(aes(state, .pred_above)) +
+  geom_col(aes(fill = state), show.legend = F, alpha = 0.75) +
+  geom_errorbar(aes(ymin = .pred_lower_above, ymax = .pred_upper_above), alpha = 0.5) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  coord_flip() +
+  labs(y = "predicted probability of being above threshold",
+       title = "modeling results")
+```
 
+___
 
+### fitting a Bayesian model
 
+```{r}
+options(mc.cores = parallel::detectCores())
+prior_dist = student_t(df = 2)
 
+# this takes a while to finish up
+stan_fit = logistic_reg() |>
+  set_engine("stan",
+             prior = prior_dist,
+             prior_intercept = prior_dist) |>
+  fit(mmr_threshold ~ state, data = measles_df)
 
+stan_fit
+```
+
+___
+
+### getting modeling results in a data frame
+
+```{r}
+bayes_pred = predict(stan_fit,
+                     new_data = new_schools,
+                     type = "prob")
+
+bayes_int = predict(stan_fit,
+                    new_data = new_schools,
+                    type = "conf_int")
+
+bayes_res = new_schools |>
+  bind_cols(bayes_pred) |>
+  bind_cols(bayes_int)
+
+glimpse(bayes_res)
+```
+
+___
+
+### comparing basic logistic regression and Bayesian modeling results
+
+```{r}
+schools_res |>
+  mutate(model = "glm") |>
+  bind_rows(bayes_res |>
+              mutate(model = "stan")) |>
+  mutate(stat = fct_reorder(state, .pred_above)) |>
+  ggplot(aes(state, .pred_above)) +
+  geom_point(aes(col = model), size = 4) +
+  geom_errorbar(aes(ymin = .pred_lower_above, ymax = .pred_upper_above, col = model),
+                linewidth = 1.5, alpha = 0.75, position = "dodge") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_color_manual(values = c("#7AAC82", "#B38FB3")) +
+  coord_flip() +
+  labs(y = "predicted probability of being above threshold",
+       title = "comparing modeling results")
+```
+
+___
 
 ### script runtime
 
